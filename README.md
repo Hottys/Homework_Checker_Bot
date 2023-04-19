@@ -1,1 +1,2 @@
-# Homework_Checker_Bot
+# homework_bot
+python telegram bot
