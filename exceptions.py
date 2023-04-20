@@ -3,12 +3,14 @@ class MessageSendError(Exception):
 
     pass
 
-class ServerAnswerError(Exception):
-    """Ошибка работы эндпоинта."""
+
+class ResponseStatusError(Exception):
+    """API недоступен."""
 
     pass
 
-class RequestError(Exception):
-    """Ошибка запроса."""
+class ServerSendError(Exception):
+    """Запрос не смог отправиться."""
 
     pass
+

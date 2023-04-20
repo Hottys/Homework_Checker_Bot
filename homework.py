@@ -6,8 +6,8 @@ from http import HTTPStatus
 from logging import StreamHandler
 from exceptions import (
     MessageSendError,
-    ServerAnswerError,
-    RequestError
+    ResponseStatusError,
+    ServerSendError
 )
 
 import requests
@@ -24,8 +24,6 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
-CHECK_LAST_MESSAGE = ''
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -59,14 +57,12 @@ def send_message(bot, message):
     try:
         logging.info('Начало отправки сообщения в Telegram')
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        global CHECK_LAST_MESSAGE
-        CHECK_LAST_MESSAGE = message
     except Exception:
         logging.error(
             'Сбой при отправке сообщения в чат'
         )
+        raise MessageSendError('Сбой при отправке сообщения в чат')
     else:
-        # Pytest почему-то требует именно дебаг
         logging.debug('Сообщение отправлено в чат')
 
 
@@ -75,18 +71,17 @@ def get_api_answer(timestamp):
     logging.info('Начало запроса к API')
     payload = {'from_date': timestamp}
     try:
-        homework_answer = requests.get(
+        homework_response = requests.get(
             ENDPOINT,
             headers=HEADERS,
             params=payload,
         )
-        status = homework_answer.status_code
-        if status == HTTPStatus.OK:
-            homework_result = homework_answer.json()
-            return homework_result
-        raise RequestError(homework_answer.json())
+        status = homework_response.status_code
+        if status != HTTPStatus.OK:
+            raise ResponseStatusError('API недоступен')
+        return homework_response.json()
     except Exception:
-        raise ServerAnswerError('Сбой в работе эндпоинта')
+        raise ServerSendError('Запрос не смог отправиться')
 
 
 def check_response(response):
@@ -96,10 +91,11 @@ def check_response(response):
         raise TypeError('Ответ API не в виде словаря')
     if 'homeworks' not in response:
         raise KeyError('Ожидаемый ключ homeworks отсутствует в ответе API')
-    if isinstance(response['homeworks'], list) is False:
+    if not isinstance(response['homeworks'], list):
         raise TypeError('Ответ API "homeworks" не список')
     if 'current_date'not in response:
         raise KeyError('Ожидаемый ключ current_date отсутствует в ответе API')
+    return response['homeworks']
 
 
 def parse_status(homework):
@@ -109,18 +105,14 @@ def parse_status(homework):
     homework_status = homework.get('status')
     if homework_name is None:
         raise KeyError('Не обнаружено имя homework_name')
-    if homework_status in HOMEWORK_VERDICTS:
-        verdict = HOMEWORK_VERDICTS[homework_status]
-        return (
-            f'Изменился статус проверки работы "{homework_name}". {verdict}'
-        )
-    else:
+    if 'status' not in homework:
+        raise KeyError('Не обнаружен ключ status')
+    if homework_status not in HOMEWORK_VERDICTS:
         raise KeyError('Не обнаружен статус домашней робаты')
-
-
-def check_last_message(message):
-    """Исключение повторной отправки одинаковых сообщений об ошибках."""
-    return message != CHECK_LAST_MESSAGE
+    verdict = HOMEWORK_VERDICTS[homework_status]
+    return (
+        f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    )
 
 
 def main():
@@ -129,16 +121,18 @@ def main():
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    check_last_message = ''
     old_status = ''
     while True:
         try:
             response = get_api_answer(timestamp)
             check_response(response)
             new_status = response['homeworks'][0]
-            if new_status != old_status:
-                send_message(bot, parse_status(new_status))
-                old_status = new_status
-            timestamp = response.get('current_date')
+            if new_status:
+                if new_status != old_status:
+                    send_message(bot, parse_status(new_status))
+                    old_status = new_status
+                timestamp = response.get('current_date')
         except MessageSendError as message_error:
             logging.error(
                 f'Сбой при отправке сообщения в чат {message_error}'
@@ -146,8 +140,9 @@ def main():
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
-            if check_last_message(message):
+            if check_last_message != message:
                 send_message(bot, message)
+                check_last_message = message
         finally:
             time.sleep(RETRY_PERIOD)
 
