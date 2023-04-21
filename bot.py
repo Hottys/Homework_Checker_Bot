@@ -7,7 +7,8 @@ from logging import StreamHandler
 from exceptions import (
     MessageSendError,
     ResponseStatusError,
-    ServerSendError
+    ServerSendError,
+    JSONСonverionError
 )
 
 import requests
@@ -79,9 +80,13 @@ def get_api_answer(timestamp):
         status = homework_response.status_code
         if status != HTTPStatus.OK:
             raise ResponseStatusError('API недоступен')
-        return homework_response.json()
     except Exception:
         raise ServerSendError('Запрос не смог отправиться')
+    try:
+        response = homework_response.json()
+    except JSONСonverionError:
+        logging.error('Данные не преобразуются в JSON')
+    return response
 
 
 def check_response(response):
@@ -101,12 +106,12 @@ def check_response(response):
 def parse_status(homework):
     """Извлечение статуса работы о конкретной домашней работе."""
     logging.info('Начало извлечения статуса дз')
-    homework_name = homework.get('homework_name')
-    homework_status = homework.get('status')
-    if homework_name is None:
+    if 'homework_name' not in homework:
         raise KeyError('Не обнаружено имя homework_name')
+    homework_name = homework.get('homework_name')
     if 'status' not in homework:
         raise KeyError('Не обнаружен ключ status')
+    homework_status = homework.get('status')
     if homework_status not in HOMEWORK_VERDICTS:
         raise KeyError('Не обнаружен статус домашней робаты')
     verdict = HOMEWORK_VERDICTS[homework_status]
@@ -117,22 +122,22 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    logging.info('Бот запущен')
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    logging.info('Бот запущен')
     timestamp = int(time.time())
     check_last_message = ''
-    old_status = ''
     while True:
         try:
             response = get_api_answer(timestamp)
-            check_response(response)
-            new_status = response['homeworks'][0]
-            if new_status:
-                if new_status != old_status:
-                    send_message(bot, parse_status(new_status))
-                    old_status = new_status
-                timestamp = response.get('current_date')
+            homeworks = check_response(response)
+            timestamp = response.get('current_date')
+            if homeworks:
+                homework = response['homeworks'][0]
+                message = parse_status(homework)
+                if message != check_last_message:
+                    send_message(bot, message)
+                    check_last_message = message
         except MessageSendError as message_error:
             logging.error(
                 f'Сбой при отправке сообщения в чат {message_error}'

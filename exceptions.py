@@ -14,3 +14,7 @@ class ServerSendError(Exception):
 
     pass
 
+class JSONСonverionError(Exception):
+    """Ошибка преобразования в JSON."""
+
+    pass
